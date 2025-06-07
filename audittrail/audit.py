@@ -1,10 +1,13 @@
+"""Core module containing the :class:`AuditTrail` utility."""
+
+from typing import Optional, List, Tuple
+
+import logging
 import pandas as pd
 import numpy as np
-import warnings
-from typing import Optional, List, Tuple
-from scipy.stats import ks_2samp
 from IPython.display import display
-import logging
+
+from .helpers import calculate_ks, calculate_psi, search_dtypes
 
 pd.set_option("display.max_columns", None)     # mostra todas as colunas
 pd.set_option("display.max_rows", 100)         # mostra até 100 linhas
@@ -13,6 +16,8 @@ pd.set_option("display.colheader_justify", "center")  # centraliza cabeçalhos
 
 
 class AuditTrail:
+    """Utility to take and compare DataFrame snapshots."""
+
     def __init__(
         self,
         track_histograms: bool = False,
@@ -29,9 +34,10 @@ class AuditTrail:
         self.auto_detect_types = auto_detect_types
         self.target_col = target_col
         self.limite_categorico = limite_categorico
-        self.default_keys = default_keys           # NOVO
+        self.default_keys = default_keys
         self.snapshots = {}
 
+        self.logger = logging.getLogger("audittrail")
         if self.enable_logging:
             logging.basicConfig(
                 filename="audit_trail.log",
@@ -41,6 +47,18 @@ class AuditTrail:
 
 
     def take_snapshot(self, df: pd.DataFrame, name: str, keys: Optional[List[str]] = None):
+        """Store statistics and metadata from a DataFrame.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            DataFrame to snapshot.
+        name : str
+            Identifier for the snapshot.
+        keys : list[str], optional
+            Columns used to check duplicates.
+        """
+
         if name in self.snapshots:
             raise ValueError(f"Snapshot com nome '{name}' já existe.")
 
@@ -64,7 +82,7 @@ class AuditTrail:
             }
 
         if self.auto_detect_types:
-            num_cols, cat_cols = self._search_dtypes(df)
+            num_cols, cat_cols = search_dtypes(df, self.target_col, self.limite_categorico)
             snap['num_cols'] = num_cols
             snap['cat_cols'] = cat_cols
 
@@ -73,6 +91,7 @@ class AuditTrail:
 
 
     def describe_snapshot(self, name: str):
+        """Print a human friendly description of a stored snapshot."""
         if name not in self.snapshots:
             raise ValueError(f"Snapshot '{name}' não encontrado.")
 
@@ -118,6 +137,7 @@ class AuditTrail:
 
 
     def compare_snapshots(self, name1: str, name2: str):
+        """Compare two snapshots and print detected differences."""
         if name1 not in self.snapshots or name2 not in self.snapshots:
             raise ValueError("Snapshot não encontrado.")
 
@@ -153,8 +173,8 @@ class AuditTrail:
                 dist1 = snap1['histograms'].get(col, {})
                 dist2 = snap2['histograms'].get(col, {})
 
-                ks_stat = self._calculate_ks(dist1, dist2)
-                psi_val = self._calculate_psi(dist1, dist2)
+                ks_stat = calculate_ks(dist1, dist2)
+                psi_val = calculate_psi(dist1, dist2)
 
                 alerta = " ⚠️" if psi_val > 0.2 else ""
                 print(f"  {col}: KS={ks_stat:.3f}, PSI={psi_val:.3f}{alerta}")
@@ -162,56 +182,14 @@ class AuditTrail:
                 if psi_val > 0.2:
                     self._log(f"Alerta PSI>0.2 detectado para '{col}': PSI={psi_val:.3f}")
 
-    def _calculate_ks(self, dist1: dict, dist2: dict):
-        v1 = list(dist1.values())
-        v2 = list(dist2.values())
-        if len(v1) > 1 and len(v2) > 1:
-            return ks_2samp(v1, v2).statistic
-        return 0.0
-
-    def _calculate_psi(self, expected: dict, actual: dict, epsilon=1e-6):
-        keys = set(expected.keys()).union(actual.keys())
-        total_expected = sum(expected.values()) + epsilon
-        total_actual = sum(actual.values()) + epsilon
-        psi = 0.0
-        for k in keys:
-            e = expected.get(k, 0) / total_expected
-            a = actual.get(k, 0) / total_actual
-            if e > 0:
-                psi += (e - a) * np.log((e + epsilon) / (a + epsilon))
-        return round(psi, 4)
-
-    def _search_dtypes(self, df: pd.DataFrame) -> Tuple[List[str], List[str]]:
-        force_categorical = []
-        id_patterns = ['client_id', '_id', 'id_', 'codigo', 'key']
-        remove_ids = True
-        verbose = False
-
-        num_cols, cat_cols = [], []
-        for col in df.columns:
-            if col == self.target_col:
-                continue
-            s = df[col]
-            if s.isnull().mean() > 0.9:
-                continue
-            if pd.api.types.is_numeric_dtype(s):
-                if remove_ids and any(p in col.lower() for p in id_patterns):
-                    continue
-                num_cols.append(col)
-            elif s.dtype == 'object' or pd.api.types.is_string_dtype(s):
-                if remove_ids and any(p in col.lower() for p in id_patterns):
-                    continue
-                if s.nunique(dropna=True) <= self.limite_categorico:
-                    cat_cols.append(col)
-            elif pd.api.types.is_bool_dtype(s):
-                cat_cols.append(col)
-        return num_cols, cat_cols
 
     def _log(self, msg):
+        """Write a message to the configured logger if enabled."""
         if self.enable_logging:
-            logging.info(msg)
+            self.logger.info(msg)
 
     def list_snapshots(self):
+        """Print the names of available snapshots."""
         print("📚 Snapshots disponíveis:")
         for k in self.snapshots:
             print(f" - {k}")
