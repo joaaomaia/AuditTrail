@@ -1,6 +1,6 @@
 # 📊 AuditTrail
 
-![logo](vassoura/imgs/social_preview_github.png)
+![logo](./imgs/social_preview_github.png)
 
 AuditTrail é uma biblioteca para registrar e comparar snapshots de `pandas.DataFrame`. Ela auxilia no controle de qualidade e monitoramento de mudanças em pipelines de dados.
 
